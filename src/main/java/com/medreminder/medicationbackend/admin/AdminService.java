@@ -39,9 +39,32 @@ public class AdminService {
         String sql="select id,category,code,name,setting_value as value,description,version,update_time as updateTime from admin_setting";
         return category==null?db.queryForList(sql+" order by id"):db.queryForList(sql+" where category=? order by id",category);
     }
+    /**
+     * 异常事件列表：关联用户与药品，便于管理员判断「谁漏服了什么药」。
+     * 关联链：abnormal_event.user_id → sys_user，task_id → remind_task → medication_plan → medicine。
+     * 均用 left join，任务/计划/药品被删除时事件仍可展示（药品名可能为空）。
+     */
     public Page events(String status,int page,int pageSize) {
-        return byStatus("abnormal_event","id,type,status,occurred_at as occurredAt,notified_at as notifiedAt,acknowledged_at as acknowledgedAt,closed_at as closedAt",
-                "status",status,Set.of("OPEN","NOTIFIED","ACKNOWLEDGED","CLOSED"),page,pageSize);
+        if(status!=null && !status.isBlank() && !Set.of("OPEN","NOTIFIED","ACKNOWLEDGED","CLOSED").contains(status))
+            throw new IllegalArgumentException("无效筛选状态");
+        checkPage(page,pageSize);
+        String from=" from abnormal_event e"
+                +" left join sys_user u on u.id=e.user_id"
+                +" left join remind_task t on t.id=e.task_id"
+                +" left join medication_plan p on p.id=t.plan_id"
+                +" left join medicine m on m.id=p.medicine_id";
+        boolean filtered=status!=null && !status.isBlank();
+        String where=filtered?" where e.status=?":"";
+        var args=new ArrayList<Object>();
+        if(filtered) args.add(status);
+        long total=db.queryForObject("select count(*)"+from+where,Long.class,args.toArray());
+        String columns="e.id,e.type,e.status,e.occurred_at as occurredAt,e.notified_at as notifiedAt,"
+                +"e.acknowledged_at as acknowledgedAt,e.closed_at as closedAt,"
+                +"coalesce(u.nickname,u.account) as userNickname,u.account as userAccount,"
+                +"m.name as medicineName,t.scheduled_at as scheduledAt";
+        var paged=new ArrayList<>(args); paged.add(pageSize); paged.add((page-1)*pageSize);
+        return new Page(db.queryForList("select "+columns+from+where+" order by e.id desc limit ? offset ?",paged.toArray()),
+                total,page,pageSize);
     }
     public Page notifications(String status,int page,int pageSize) {
         return byStatus("notification","id,type,biz_type as bizType,send_status as sendStatus,retry_count as retryCount,create_time as createTime,sent_at as sentAt",
@@ -57,10 +80,13 @@ public class AdminService {
         return page(table,columns," where "+field+"=?",List.of(status),page,size);
     }
     private Page page(String table,String columns,String where,List<Object> args,int page,int size) {
-        if(page<1 || page>100000 || size<1 || size>50) throw new IllegalArgumentException("页码1至100000，每页数量1至50");
+        checkPage(page,size);
         long total=db.queryForObject("select count(*) from "+table+where,Long.class,args.toArray());
         var paged=new ArrayList<>(args); paged.add(size); paged.add((page-1)*size);
         return new Page(db.queryForList("select "+columns+" from "+table+where+" order by id desc limit ? offset ?",paged.toArray()),total,page,size);
+    }
+    private void checkPage(int page,int size) {
+        if(page<1 || page>100000 || size<1 || size>50) throw new IllegalArgumentException("页码1至100000，每页数量1至50");
     }
     /** The state write and append-only audit share one transaction. No role or password changes. */
     @Transactional

@@ -38,5 +38,9 @@ admin-web/dist/
 admin-web/test-results/
 admin-web/playwright-report/
 
-# 本机私密配置（数据库口令等），只提交 .example 模板
+# 本机私密配置（数据库口令/JWT 密钥等），只提交 .example 模板
 application-local.yml
+application-local-*.yml
+.env
+*.pem
+*.jks
